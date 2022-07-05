@@ -22,23 +22,29 @@ except KeyError as err:
         print(f"Не найден параметр {err}")
         sys.exit(os.EX_CONFIG)
 
-def upload():
+
+def pars():
         parser = argparse.ArgumentParser()
         sub_parser = parser.add_subparsers(dest='command', required=True)
         upload_command = sub_parser.add_parser('upload', help='Uploading photos')
         upload_command.add_argument('-a', '--album', type=str, dest='album', required=True)
         upload_command.add_argument('-p', '--path', type=str, dest='path', required=True)
-        arguments = parser.parse_args()
-        path = arguments.path
-        album = arguments.album
+        download_command = sub_parser.add_parser('download', help='Downloading photos')
+        download_command.add_argument('-a', '--album', type=str, dest='album', required=True)
+        download_command.add_argument('-p', '--path', type=str, dest='path', required=True)
+        listalbom_command = sub_parser.add_parser('list-albums',
+                                                  help='the command displays a list of albums in the cloud storage')
+        listphoto_command = sub_parser.add_parser('list-photos', help='the command displays a list of photos')
+        listphoto_command.add_argument('-a', '--album', type=str, dest='album', required=True)
+        generate_site_command = sub_parser.add_parser('generate-site', help='the command displays a list of photos')
+        return parser
+
+
+# Загрузка альбома на облако
+def upload(path, album):
         if os.path.exists(path) and os.path.isdir(path):
                 files = [file for file in os.listdir(path) if
                          os.path.isfile(os.path.join(path, file)) and file.endswith(('.jpg', '.jpeg'))]
-                session = boto3.session.Session()
-                s3 = session.client(
-                        service_name='s3',
-                        endpoint_url='https://storage.yandexcloud.net'
-                )
                 for elem in files:
                         name = '/'.join([album, elem])
                         elem = '/'.join([path, elem])
@@ -47,25 +53,14 @@ def upload():
         else:
                 print('no files')
 
-def download():
-        parser = argparse.ArgumentParser()
-        sub_parser = parser.add_subparsers(dest='command', required=True)
-        download_command = sub_parser.add_parser('download', help='Downloading photos')
-        download_command.add_argument('-a', '--album', type=str, dest='album', required=True)
-        download_command.add_argument('-p', '--path', type=str, dest='path', required=True)
-        arguments = parser.parse_args()
-        path = arguments.path
-        album = arguments.album
-        session = boto3.session.Session()
-        s3 = session.client(
-                service_name='s3',
-                endpoint_url='https://storage.yandexcloud.net'
-        )
+# Скачивание
+def download(path, album):
         if os.path.exists(path) and os.path.isdir(path):
                 response = s3.list_objects(Bucket = bucket, Prefix = album)
                 if 'Contents' not in response:
                         print('this album does not exist')
                 else:
+                        # Список всем элементов из этого альбома
                         lst = [el['Key'] for el in response['Contents'] if el['Key'][:el['Key'].rfind('/')]  == album]
                         if len(lst)==0:
                                 print('this album is empty')
@@ -78,20 +73,82 @@ def download():
         else:
                 print('wrong directory selected')
 
+# Список альбомов
 def list_albums():
-        parser = argparse.ArgumentParser()
-        sub_parser = parser.add_subparsers(dest='command', required=True)
-        listalbom_command = sub_parser.add_parser('list-albums', help='the command displays a list of albums in the cloud storage')
+        lst = set([el['Key'][:el['Key'].rfind('/')] for el in s3.list_objects_v2(Bucket = bucket)['Contents']
+                   if '/' in el['Key']])
+        print(lst)
+
+# Список фоток
+def list_photos(album):
+        response = s3.list_objects(Bucket=bucket, Prefix=album)
+        if 'Contents' not in response:
+                print('this album does not exist')
+                return
+        lst = [el['Key'][el['Key'].rfind('/')+1:] for el in response['Contents']
+               if el['Key'][:el['Key'].rfind('/')] == album]
+        print(lst)
+
+def generate_site():
+        lst = set([el['Key'][:el['Key'].rfind('/')] for el in s3.list_objects_v2(Bucket = bucket)['Contents']
+                   if '/' in el['Key']])
+        lst = [el for el in lst]
+        i = 1
+        lst_album = {}
+        index = open("index.html", "w+")
+        with open('index_ex.html') as f:
+                l = f.readline().strip()
+                while l:
+                        index.write(l)
+                        index.write('\n')
+                        if l == '<ul>':
+                                for el in lst:
+                                        w = f"album{i}.html"
+                                        i+=1
+                                        index.write(f"<li><a href='{w}'>{el}</a></li>")
+                                        lst_album[w] = el
+                                        index.write('\n')
+                        l = f.readline().strip()
+        index.close()
+        s3.upload_file("index.html", bucket, "index.html")
+        for elem in lst_album:
+                file = open(elem, "w+")
+                with open('album_ex.html') as f:
+                        l = f.readline().strip()
+                        while l:
+                                file.write(l)
+                                file.write('\n')
+                                if l == '<div class="galleria">':
+                                        album = lst_album[elem]
+                                        response = s3.list_objects(Bucket=bucket, Prefix=album)
+                                        lst_of_elem  = [el['Key'] for el in response['Contents'] if
+                                               el['Key'][:el['Key'].rfind('/')] == album]
+                                        for el in lst_of_elem:
+                                                file.write(f"<img src={el}>")
+                                                file.write('\n')
+                                l = f.readline().strip()
+                file.close()
+                s3.upload_file(elem, bucket, elem)
+        print(f"https://{bucket}.website.yandexcloud.net")
+
+
+
+if __name__ == '__main__':
         session = boto3.session.Session()
         s3 = session.client(
                 service_name='s3',
                 endpoint_url='https://storage.yandexcloud.net'
         )
-        lst = set([el['Key'][:el['Key'].rfind('/')] for el in s3.list_objects_v2(Bucket = bucket)['Contents']])
-        print(lst)
+        parser = pars()
+        arg = parser.parse_args()
+        if arg.command == 'upload':
+                upload(arg.path, arg.album)
+        elif arg.command == 'download':
+                download(arg.path, arg.album)
+        elif arg.command == 'list-albums':
+                list_albums()
+        elif arg.command == 'list-photos':
+                list_photos(arg.album)
+        elif arg.command == 'generate-site':
+                generate_site()
 
-
-if __name__ == '__main__':
-        #upload()
-        #download()
-        list_albums()
