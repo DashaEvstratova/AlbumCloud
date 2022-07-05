@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+import argparse
+import os
+import sys
+import configparser
+import boto3
+
+try:
+        cfg_file = open(f"{os.environ['HOME']}/.config/cloudphoto/cloudphotorc")
+except OSError:
+        print("Не удалось прочитать конфигурационный файл", file=sys.stderr)
+        sys.exit(os.EX_CONFIG)
+cfg = configparser.ConfigParser()
+cfg.read_file(cfg_file)
+try:
+        bucket = cfg['default']['bucket']
+        aws_access_key_id = cfg['default']['aws_access_key_id']
+        aws_secret_access_key = cfg['default']['aws_secret_access_key']
+        region = cfg['default']['region']
+        endpoint_url = cfg['default']['endpoint_url']
+except KeyError as err:
+        print(f"Не найден параметр {err}")
+        sys.exit(os.EX_CONFIG)
+
+def upload():
+        parser = argparse.ArgumentParser()
+        sub_parser = parser.add_subparsers(dest='command', required=True)
+        upload_command = sub_parser.add_parser('upload', help='Uploading photos')
+        upload_command.add_argument('-a', '--album', type=str, dest='album', required=True)
+        upload_command.add_argument('-p', '--path', type=str, dest='path', required=True)
+        arguments = parser.parse_args()
+        path = arguments.path
+        album = arguments.album
+        if os.path.exists(path) and os.path.isdir(path):
+                files = [file for file in os.listdir(path) if
+                         os.path.isfile(os.path.join(path, file)) and file.endswith(('.jpg', '.jpeg'))]
+                session = boto3.session.Session()
+                s3 = session.client(
+                        service_name='s3',
+                        endpoint_url='https://storage.yandexcloud.net'
+                )
+                for elem in files:
+                        name = '/'.join([album, elem])
+                        elem = '/'.join([path, elem])
+                        s3.upload_file(elem, bucket, name)
+                print('OK')
+        else:
+                print('no files')
+
+def download():
+        parser = argparse.ArgumentParser()
+        sub_parser = parser.add_subparsers(dest='command', required=True)
+        download_command = sub_parser.add_parser('download', help='Downloading photos')
+        download_command.add_argument('-a', '--album', type=str, dest='album', required=True)
+        download_command.add_argument('-p', '--path', type=str, dest='path', required=True)
+        arguments = parser.parse_args()
+        path = arguments.path
+        album = arguments.album
+        session = boto3.session.Session()
+        s3 = session.client(
+                service_name='s3',
+                endpoint_url='https://storage.yandexcloud.net'
+        )
+        if os.path.exists(path) and os.path.isdir(path):
+                response = s3.list_objects(Bucket = bucket, Prefix = album)
+                if 'Contents' not in response:
+                        print('this album does not exist')
+                else:
+                        lst = [el['Key'] for el in response['Contents'] if el['Key'][:el['Key'].rfind('/')]  == album]
+                        if len(lst)==0:
+                                print('this album is empty')
+                                return
+                        else:
+                                for elem in lst:
+                                        el = '/'.join([path, elem[(elem.rfind('/')+1):]])
+                                        s3.download_file(bucket,elem, el)
+                                print('Ok')
+        else:
+                print('wrong directory selected')
+
+def list_albums():
+        parser = argparse.ArgumentParser()
+        sub_parser = parser.add_subparsers(dest='command', required=True)
+        listalbom_command = sub_parser.add_parser('list-albums', help='the command displays a list of albums in the cloud storage')
+        session = boto3.session.Session()
+        s3 = session.client(
+                service_name='s3',
+                endpoint_url='https://storage.yandexcloud.net'
+        )
+        lst = set([el['Key'][:el['Key'].rfind('/')] for el in s3.list_objects_v2(Bucket = bucket)['Contents']])
+        print(lst)
+
+
+if __name__ == '__main__':
+        #upload()
+        #download()
+        list_albums()
