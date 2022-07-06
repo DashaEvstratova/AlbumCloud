@@ -51,7 +51,7 @@ def upload(path, album):
                         s3.upload_file(elem, bucket, name)
                 print('OK')
         else:
-                print('no files')
+                print('no dir')
 
 # Скачивание
 def download(path, album):
